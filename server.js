@@ -1,51 +1,45 @@
 const express = require('express');
-const http = require('http');
-const WebSocket = require('ws');
-
 const app = express();
-const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
 
-let esp32Socket = null; 
+let currentPass = "doan2026"; // Mật khẩu mặc định ban đầu
+let esp32Response = null;
 
-wss.on('connection', (ws) => {
-    console.log('Co thiet bi ket noi vao Server...');
-    ws.on('message', (message) => {
-        const msgStr = message.toString();
-        if (msgStr === 'ESP32_STATION_ACTIVE') {
-            esp32Socket = ws;
-            console.log('ESP32 cua ban da ket noi thanh cong!');
-        }
-    });
-    ws.on('close', () => {
-        if (esp32Socket === ws) esp32Socket = null;
-        console.log('ESP32 da mat ket noi.');
+app.use(express.json());
+
+// 1. Cổng dành cho ESP32 kết nối liên tục 24/7 để chờ nhận mật khẩu mới
+app.get('/esp32-connect', (req, res) => {
+    res.setHeader('Content-Type', 'text/event-stream');
+    res.setHeader('Cache-Control', 'no-cache');
+    res.setHeader('Connection', 'keep-alive');
+    res.flushHeaders();
+
+    console.log('ESP32 nhà bạn đã kết nối thành công!');
+    esp32Response = res;
+
+    // Gửi mật khẩu hiện tại xuống cho mạch ngay khi vừa kết nối
+    res.write(`data: ${currentPass}\n\n`);
+
+    req.on('close', () => {
+        esp32Response = null;
+        console.log('ESP32 đã ngắt kết nối.');
     });
 });
 
+// 2. Link gọi đổi mật khẩu từ xa từ điện thoại của bạn: /api/change-pass?newpass=xxx
 app.get('/api/change-pass', (req, res) => {
     const newPass = req.query.newpass;
     if (!newPass) return res.status(400).send('Thieu mat khau moi!');
-    if (esp32Socket) {
-        esp32Socket.send(`CHANGE_PASS:${newPass}`);
+    
+    currentPass = newPass;
+    if (esp32Response) {
+        esp32Response.write(`data: ${newPass}\n\n`); // Bắn thẳng mật khẩu mới xuống mạch ở nhà
         return res.send(`Da doi mat khau sinh vien thanh: ${newPass}`);
     } else {
-        return res.status(500).send('ESP32 dang ngoai tuyen (Offline)!');
-    }
-});
-
-app.get('/api/change-token', (req, res) => {
-    const newToken = req.query.newtoken;
-    if (!newToken) return res.status(400).send('Thieu Token moi!');
-    if (esp32Socket) {
-        esp32Socket.send(`CHANGE_TOKEN:${newToken}`);
-        return res.send(`Da doi Token MMO thanh: ${newToken}`);
-    } else {
-        return res.status(500).send('ESP32 dang ngoai tuyen (Offline)!');
+        return res.send(`Đã lưu mật khẩu mới, nhưng ESP32 ở nhà đang ngoại tuyến (Offline)!`);
     }
 });
 
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => {
+app.listen(PORT, () => {
     console.log('Server dang chay tren cong: ' + PORT);
 });
